@@ -733,6 +733,13 @@ defaultdict(<class 'list'>, {'col..., 'col...})]
            __index_level_0__  col1  col2
         0                  0     1     3
         1                  1     2     4
+
+        Calling to_koalas on a Koalas DataFrame simply returns itself.
+
+        >>> df.to_koalas()
+           col1  col2
+        0     1     3
+        1     2     4
         """
         if isinstance(self, DataFrame):
             return self
@@ -1160,10 +1167,6 @@ defaultdict(<class 'list'>, {'col..., 'col...})]
         """
         return self._reduce_for_stat_function(_Frame._count_expr)
 
-    def unique(self):
-        sdf = self._sdf
-        return DataFrame(spark.DataFrame(sdf._jdf.distinct(), sdf.sql_ctx), self._metadata.copy())
-
     def drop(self, labels=None, axis=1, columns: Union[str, List[str]] = None):
         """
         Drop specified labels from columns.
@@ -1298,33 +1301,45 @@ defaultdict(<class 'list'>, {'col..., 'col...})]
         Examples
         --------
         >>> df = ks.DataFrame({
-        ...     'col1': ['A', 'A', 'B', None, 'D', 'C'],
-        ...     'col2': [2, 1, 9, 8, 7, 4],
-        ...     'col3': [0, 1, 9, 4, 2, 3],
+        ...     'col1': ['A', 'B', None, 'D', 'C'],
+        ...     'col2': [2, 9, 8, 7, 4],
+        ...     'col3': [0, 9, 4, 2, 3],
         ... })
         >>> df
            col1  col2  col3
         0     A     2     0
-        1     A     1     1
-        2     B     9     9
-        3  None     8     4
-        4     D     7     2
-        5     C     4     3
+        1     B     9     9
+        2  None     8     4
+        3     D     7     2
+        4     C     4     3
 
         Sort by col1
 
         >>> df.sort_values(by=['col1'])
            col1  col2  col3
         0     A     2     0
-        1     A     1     1
-        2     B     9     9
-        5     C     4     3
-        4     D     7     2
-        3  None     8     4
+        1     B     9     9
+        4     C     4     3
+        3     D     7     2
+        2  None     8     4
 
+        Sort Descending
+
+        >>> df.sort_values(by='col1', ascending=False)
+           col1  col2  col3
+        3     D     7     2
+        4     C     4     3
+        1     B     9     9
+        0     A     2     0
+        2  None     8     4
 
         Sort by multiple columns
 
+        >>> df = ks.DataFrame({
+        ...     'col1': ['A', 'A', 'B', None, 'D', 'C'],
+        ...     'col2': [2, 1, 9, 8, 7, 4],
+        ...     'col3': [0, 1, 9, 4, 2, 3],
+        ... })
         >>> df.sort_values(by=['col1', 'col2'])
            col1  col2  col3
         1     A     1     1
@@ -1332,17 +1347,6 @@ defaultdict(<class 'list'>, {'col..., 'col...})]
         2     B     9     9
         5     C     4     3
         4     D     7     2
-        3  None     8     4
-
-        Sort Descending
-
-        >>> df.sort_values(by='col1', ascending=False)
-           col1  col2  col3
-        4     D     7     2
-        5     C     4     3
-        2     B     9     9
-        0     A     2     0
-        1     A     1     1
         3  None     8     4
         """
         if isinstance(by, string_types):
@@ -1435,10 +1439,82 @@ defaultdict(<class 'list'>, {'col..., 'col...})]
 
         return DataFrame(self._sdf.select(_select_columns), self._metadata.copy())
 
-    @derived_from(pd.DataFrame)
     def pipe(self, func, *args, **kwargs):
-        # Taken from pandas:
-        # https://github.com/pydata/pandas/blob/master/pandas/core/generic.py#L2698-L2707
+        """
+        Apply func(self, *args, **kwargs).
+
+        Parameters
+        ----------
+        func : function
+            function to apply to the Dataframe.
+            ``args``, and ``kwargs`` are passed into ``func``.
+            Alternatively a ``(callable, data_keyword)`` tuple where
+            ``data_keyword`` is a string indicating the keyword of
+            ``callable`` that expects the DataFrames.
+        args : iterable, optional
+            positional arguments passed into ``func``.
+        kwargs : mapping, optional
+            a dictionary of keyword arguments passed into ``func``.
+
+        Returns
+        -------
+        object : the return type of ``func``.
+
+
+        Notes
+        -----
+        Use ``.pipe`` when chaining together functions that expect
+        Series, DataFrames or GroupBy objects. For example, given
+
+        >>> df = ks.DataFrame({'category': ['A', 'A', 'B'],
+        ...                    'col1': [1, 2, 3],
+        ...                    'col2': [4, 5, 6]})
+        >>> def keep_category_a(df):
+        ...    return df[df['category'] == 'A']
+        >>> def add_one(df, column):
+        ...    return df.assign(col3=df[column] + 1)
+        >>> def multiply(df, column1, column2):
+        ...    return df.assign(col4=df[column1] * df[column2])
+
+
+        instead of writing
+
+        >>> multiply(add_one(keep_category_a(df), column="col1"), column1="col2", column2="col3")
+          category  col1  col2  col3  col4
+        0        A     1     4     2     8
+        1        A     2     5     3    15
+
+
+        You can write
+
+        >>> (df.pipe(keep_category_a)
+        ...    .pipe(add_one, column="col1")
+        ...    .pipe(multiply, column1="col2", column2="col3")
+        ... )
+          category  col1  col2  col3  col4
+        0        A     1     4     2     8
+        1        A     2     5     3    15
+
+
+        If you have a function that takes the data as (say) the second
+        argument, pass a tuple indicating which keyword expects the
+        data. For example, suppose ``f`` takes its data as ``df``:
+
+        >>> def multiply_2(column1, df, column2):
+        ...     return df.assign(col4=df[column1] * df[column2])
+
+
+        Then you can write
+
+        >>> (df.pipe(keep_category_a)
+        ...    .pipe(add_one, column="col1")
+        ...    .pipe((multiply_2, 'df'), column1="col2", column2="col3")
+        ... )
+          category  col1  col2  col3  col4
+        0        A     1     4     2     8
+        1        A     2     5     3    15
+        """
+
         if isinstance(func, tuple):
             func, target = func
             if target in kwargs:
@@ -1496,7 +1572,10 @@ defaultdict(<class 'list'>, {'col..., 'col...})]
         raise NotImplementedError(key)
 
     def __repr__(self):
-        return repr(self.toPandas())
+        return repr(self.head(max_display_count).to_pandas())
+
+    def _repr_html_(self):
+        return self.head(max_display_count).to_pandas()._repr_html_()
 
     def __getitem__(self, key):
         return self._pd_getitem(key)
@@ -1540,9 +1619,6 @@ defaultdict(<class 'list'>, {'col..., 'col...})]
     def __dir__(self):
         fields = [f for f in self._sdf.schema.fieldNames() if ' ' not in f]
         return super(DataFrame, self).__dir__() + fields
-
-    def _repr_html_(self):
-        return self.head(max_display_count).toPandas()._repr_html_()
 
     @classmethod
     def _validate_axis(cls, axis=0):
