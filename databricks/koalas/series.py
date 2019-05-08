@@ -507,8 +507,6 @@ class Series(_Frame):
         -------
         Returns the unique values as a Series.
 
-        See Examples section.
-
         Examples
         --------
         >>> ks.Series([2, 1, 3, 3], name='A').unique()
